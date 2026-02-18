@@ -221,3 +221,165 @@ bool NetworkDiscovery::probe_device_id(int fd, std::string& vendor,
 
     return !vendor.empty();
 }
+
+// ---------------------------------------------------------------------------
+// Worker thread
+// ---------------------------------------------------------------------------
+
+void NetworkDiscovery::worker(const std::vector<std::string>& ips,
+                               size_t start, size_t end) {
+    for (size_t i = start; i < end && running_; ++i) {
+        auto host = probe_host(ips[i]);
+
+        if (host.latency_ms >= 0) {
+            std::lock_guard<std::mutex> lock(results_mutex_);
+            results_.push_back(std::move(host));
+        }
+
+        ++progress_;
+        if (!config_.quiet) {
+            ui_.print_progress(progress_, total_hosts_, "Discovering");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main scan
+// ---------------------------------------------------------------------------
+
+int NetworkDiscovery::run() {
+    auto ips = expand_cidr(config_.cidr);
+    if (ips.empty()) {
+        std::cerr << "Error: No hosts in range " << config_.cidr << "\n";
+        return 0;
+    }
+
+    total_hosts_ = static_cast<uint32_t>(ips.size());
+    running_ = true;
+    progress_ = 0;
+
+    if (!config_.quiet) {
+        std::cerr << ansi::BOLD << "Discovering Modbus devices" << ansi::RESET
+                  << " in " << config_.cidr
+                  << " (" << total_hosts_ << " hosts, "
+                  << config_.thread_count << " threads)\n";
+    }
+
+    // Partition work across threads
+    int num_threads = std::min(config_.thread_count,
+                                static_cast<int>(ips.size()));
+    size_t chunk = ips.size() / static_cast<size_t>(num_threads);
+
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<size_t>(num_threads));
+
+    for (int t = 0; t < num_threads; ++t) {
+        size_t s = static_cast<size_t>(t) * chunk;
+        size_t e = (t == num_threads - 1) ? ips.size() : s + chunk;
+        threads.emplace_back(&NetworkDiscovery::worker, this,
+                              std::cref(ips), s, e);
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    if (!config_.quiet) {
+        ui_.clear_line();
+    }
+
+    // Sort results by IP
+    std::sort(results_.begin(), results_.end(),
+              [](const DiscoveredHost& a, const DiscoveredHost& b) {
+                  return parse_ipv4(a.ip) < parse_ipv4(b.ip);
+              });
+
+    // Count Modbus-responsive hosts
+    int modbus_count = 0;
+    for (const auto& h : results_) {
+        if (h.modbus_responsive) ++modbus_count;
+    }
+
+    if (!config_.quiet) {
+        std::cerr << "\nDiscovered " << results_.size() << " hosts with open port "
+                  << config_.port << ", " << modbus_count << " running Modbus\n";
+    }
+
+    return static_cast<int>(results_.size());
+}
+
+void NetworkDiscovery::stop() {
+    running_ = false;
+}
+
+// ---------------------------------------------------------------------------
+// Output formatting
+// ---------------------------------------------------------------------------
+
+std::string NetworkDiscovery::format_results() const {
+    std::ostringstream os;
+
+    os << "\n";
+    os << "  IP Address         Port   Modbus   Latency   Vendor / Product\n";
+    os << "  ────────────────── ────── ──────── ───────── ──────────────────────────\n";
+
+    for (const auto& h : results_) {
+        os << "  " << std::left << std::setw(19) << h.ip
+           << std::setw(7) << h.port
+           << std::setw(9) << (h.modbus_responsive ? "yes" : "no")
+           << std::setw(10) << (std::to_string(h.latency_ms) + "ms");
+
+        if (!h.device_vendor.empty()) {
+            os << h.device_vendor;
+            if (!h.device_product.empty()) {
+                os << " / " << h.device_product;
+            }
+        }
+        os << "\n";
+    }
+
+    return os.str();
+}
+
+std::string NetworkDiscovery::format_json() const {
+    std::ostringstream os;
+
+    os << "{\n";
+    os << "  \"discovery\": {\n";
+    os << "    \"cidr\": \"" << config_.cidr << "\",\n";
+    os << "    \"port\": " << config_.port << ",\n";
+    os << "    \"hosts_scanned\": " << total_hosts_ << ",\n";
+    os << "    \"hosts_responsive\": " << results_.size() << ",\n";
+
+    int modbus_count = 0;
+    for (const auto& h : results_) {
+        if (h.modbus_responsive) ++modbus_count;
+    }
+    os << "    \"modbus_responsive\": " << modbus_count << "\n";
+    os << "  },\n";
+
+    os << "  \"hosts\": [\n";
+    for (size_t i = 0; i < results_.size(); ++i) {
+        const auto& h = results_[i];
+        os << "    {\n";
+        os << "      \"ip\": \"" << h.ip << "\",\n";
+        os << "      \"port\": " << h.port << ",\n";
+        os << "      \"modbus_responsive\": " << (h.modbus_responsive ? "true" : "false") << ",\n";
+        os << "      \"latency_ms\": " << h.latency_ms;
+        if (!h.device_vendor.empty()) {
+            os << ",\n      \"vendor\": \"" << h.device_vendor << "\"";
+        }
+        if (!h.device_product.empty()) {
+            os << ",\n      \"product\": \"" << h.device_product << "\"";
+        }
+        os << "\n    }";
+        if (i + 1 < results_.size()) os << ",";
+        os << "\n";
+    }
+    os << "  ]\n";
+    os << "}\n";
+
+    return os.str();
+}
+
+}  // namespace modbus_probe
