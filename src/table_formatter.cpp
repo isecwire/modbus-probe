@@ -249,3 +249,297 @@ std::string TableFormatter::format_findings_table(const ScanReport& report, bool
 
     return os.str();
 }
+
+// ---------------------------------------------------------------------------
+// Register dump table
+// ---------------------------------------------------------------------------
+
+std::string TableFormatter::format_register_table(const UnitResult& unit, bool color) {
+    std::ostringstream os;
+    const char* bold  = color ? ansi::BOLD : "";
+    const char* reset = color ? ansi::RESET : "";
+
+    if (!unit.holding_registers.empty()) {
+        os << "\n" << bold << "  Holding Registers (Unit " << static_cast<int>(unit.unit_id) << ")" << reset << "\n";
+        std::vector<size_t> rw = {10, 10, 8};
+        os << "  " << top_border(rw);
+        os << "  " << row({"Address", "Hex", "Decimal"}, rw);
+        os << "  " << mid_border(rw);
+        for (const auto& reg : unit.holding_registers) {
+            std::ostringstream hex;
+            hex << "0x" << std::setfill('0') << std::setw(4) << std::hex << reg.value;
+            os << "  " << row({std::to_string(reg.address), hex.str(), std::to_string(reg.value)}, rw);
+        }
+        os << "  " << bot_border(rw);
+    }
+
+    if (!unit.input_registers.empty()) {
+        os << "\n" << bold << "  Input Registers (Unit " << static_cast<int>(unit.unit_id) << ")" << reset << "\n";
+        std::vector<size_t> rw = {10, 10, 8};
+        os << "  " << top_border(rw);
+        os << "  " << row({"Address", "Hex", "Decimal"}, rw);
+        os << "  " << mid_border(rw);
+        for (const auto& reg : unit.input_registers) {
+            std::ostringstream hex;
+            hex << "0x" << std::setfill('0') << std::setw(4) << std::hex << reg.value;
+            os << "  " << row({std::to_string(reg.address), hex.str(), std::to_string(reg.value)}, rw);
+        }
+        os << "  " << bot_border(rw);
+    }
+
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// Coil status table
+// ---------------------------------------------------------------------------
+
+std::string TableFormatter::format_coil_table(const UnitResult& unit, bool color) {
+    std::ostringstream os;
+    if (unit.coils.empty()) return os.str();
+
+    const char* bold  = color ? ansi::BOLD : "";
+    const char* reset = color ? ansi::RESET : "";
+    const char* green = color ? ansi::GREEN : "";
+    const char* red   = color ? ansi::RED : "";
+
+    os << "\n" << bold << "  Coils (Unit " << static_cast<int>(unit.unit_id) << ")" << reset << "\n";
+    std::vector<size_t> cw = {10, 8};
+    os << "  " << top_border(cw);
+    os << "  " << row({"Address", "State"}, cw);
+    os << "  " << mid_border(cw);
+    for (const auto& [addr, val] : unit.coils) {
+        std::string state = val
+            ? std::string(red) + "ON" + reset
+            : std::string(green) + "OFF" + reset;
+        os << "  " << row({std::to_string(addr), state}, cw);
+    }
+    os << "  " << bot_border(cw);
+
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// Fuzz results table
+// ---------------------------------------------------------------------------
+
+std::string TableFormatter::format_fuzz_table(const std::vector<FuzzEntry>& entries,
+                                               uint8_t unit_id, bool color) {
+    std::ostringstream os;
+    if (entries.empty()) return os.str();
+
+    const char* bold  = color ? ansi::BOLD : "";
+    const char* reset = color ? ansi::RESET : "";
+    const char* green = color ? ansi::GREEN : "";
+    const char* red   = color ? ansi::RED : "";
+    const char* yel   = color ? ansi::YELLOW : "";
+    const char* dim   = color ? ansi::DIM : "";
+
+    os << "\n" << bold << "  Function Code Fuzz Results (Unit " << static_cast<int>(unit_id) << ")" << reset << "\n";
+    std::vector<size_t> fw = {6, 10, 38, 10};
+    os << "  " << top_border(fw);
+    os << "  " << row({"FC", "Result", "Description", "Time (ms)"}, fw);
+    os << "  " << mid_border(fw);
+
+    for (const auto& e : entries) {
+        std::string fc_str = "0x" + ([&]{
+            std::ostringstream h; h << std::setfill('0') << std::setw(2) << std::hex << static_cast<int>(e.function_code);
+            return h.str();
+        })();
+
+        std::string result_str;
+        switch (e.result_type) {
+            case FuzzResultType::Supported:
+                result_str = std::string(green) + "SUPPORTED" + reset;
+                break;
+            case FuzzResultType::Exception:
+                result_str = std::string(yel) + "EXCEPTION" + reset;
+                break;
+            case FuzzResultType::Timeout:
+                result_str = std::string(dim) + "TIMEOUT" + reset;
+                break;
+            case FuzzResultType::Error:
+                result_str = std::string(red) + "ERROR" + reset;
+                break;
+        }
+
+        std::ostringstream time_str;
+        time_str << std::fixed << std::setprecision(1) << e.response_time_ms;
+
+        os << "  " << row({fc_str, result_str, e.description, time_str.str()}, fw);
+    }
+    os << "  " << bot_border(fw);
+
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// Device Identification table
+// ---------------------------------------------------------------------------
+
+std::string TableFormatter::format_device_id_table(const DeviceIdentification& id,
+                                                     uint8_t unit_id, bool color) {
+    std::ostringstream os;
+    if (!id.supported) return os.str();
+
+    const char* bold  = color ? ansi::BOLD : "";
+    const char* reset = color ? ansi::RESET : "";
+
+    os << "\n" << bold << "  Device Identification (Unit " << static_cast<int>(unit_id) << ")" << reset << "\n";
+    std::vector<size_t> dw = {22, 44};
+    os << "  " << top_border(dw);
+    os << "  " << row({"Property", "Value"}, dw);
+    os << "  " << mid_border(dw);
+
+    auto add_row = [&](const std::string& key, const std::string& val) {
+        if (!val.empty()) {
+            os << "  " << row({key, val}, dw);
+        }
+    };
+
+    add_row("Vendor Name", id.vendor_name);
+    add_row("Product Code", id.product_code);
+    add_row("Revision", id.revision);
+    add_row("Vendor URL", id.vendor_url);
+    add_row("Product Name", id.product_name);
+    add_row("Model Name", id.model_name);
+    add_row("User Application", id.user_application_name);
+
+    for (const auto& [oid, val] : id.extended_objects) {
+        add_row(DeviceIdParser::object_id_name(oid), val);
+    }
+
+    os << "  " << bot_border(dw);
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// Timing analysis table
+// ---------------------------------------------------------------------------
+
+std::string TableFormatter::format_timing_table(const ScanReport& report, bool color) {
+    std::ostringstream os;
+    if (report.results.empty()) return os.str();
+
+    const char* bold  = color ? ansi::BOLD : "";
+    const char* reset = color ? ansi::RESET : "";
+    const char* green = color ? ansi::GREEN : "";
+    const char* yel   = color ? ansi::YELLOW : "";
+    const char* red   = color ? ansi::RED : "";
+
+    os << "\n" << bold << "  Response Timing Analysis" << reset << "\n";
+    std::vector<size_t> tw = {8, 14, 14, 14, 10};
+    os << "  " << top_border(tw);
+    os << "  " << row({"Unit", "Min (ms)", "Avg (ms)", "Max (ms)", "Rating"}, tw);
+    os << "  " << mid_border(tw);
+
+    for (const auto& r : report.results) {
+        if (!r.responsive) continue;
+        if (r.timing_samples.empty()) continue;
+
+        double min_t = r.timing_samples[0];
+        double max_t = r.timing_samples[0];
+        double sum = 0;
+        for (double t : r.timing_samples) {
+            if (t < min_t) min_t = t;
+            if (t > max_t) max_t = t;
+            sum += t;
+        }
+        double avg_t = sum / static_cast<double>(r.timing_samples.size());
+
+        auto fmt = [](double v) {
+            std::ostringstream s;
+            s << std::fixed << std::setprecision(1) << v;
+            return s.str();
+        };
+
+        std::string rating;
+        if (avg_t < 50.0) {
+            rating = std::string(green) + "FAST" + reset;
+        } else if (avg_t < 200.0) {
+            rating = std::string(yel) + "NORMAL" + reset;
+        } else {
+            rating = std::string(red) + "SLOW" + reset;
+        }
+
+        os << "  " << row({std::to_string(r.unit_id), fmt(min_t), fmt(avg_t), fmt(max_t), rating}, tw);
+    }
+    os << "  " << bot_border(tw);
+
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// CSV formatter
+// ---------------------------------------------------------------------------
+
+std::string CsvFormatter::escape_csv(const std::string& s) {
+    if (s.find_first_of(",\"\n\r") == std::string::npos) return s;
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"') out += "\"\"";
+        else out += c;
+    }
+    out += "\"";
+    return out;
+}
+
+std::string CsvFormatter::format_csv(const ScanReport& report) {
+    std::ostringstream os;
+    os << "unit_id,responsive,holding_regs_readable,input_regs_readable,"
+       << "coils_readable,write_tested,write_vulnerable,severity,detail\n";
+
+    for (const auto& r : report.results) {
+        if (!r.responsive) continue;
+
+        std::string severity;
+        if (r.write_test_vulnerable) severity = "CRITICAL";
+        else if (r.holding_registers_readable || r.input_registers_readable || r.coils_readable) severity = "HIGH";
+        else severity = "MEDIUM";
+
+        os << static_cast<int>(r.unit_id) << ","
+           << (r.responsive ? "true" : "false") << ","
+           << (r.holding_registers_readable ? "true" : "false") << ","
+           << (r.input_registers_readable ? "true" : "false") << ","
+           << (r.coils_readable ? "true" : "false") << ","
+           << (r.write_test_performed ? "true" : "false") << ","
+           << (r.write_test_vulnerable ? "true" : "false") << ","
+           << severity << ","
+           << escape_csv(r.write_test_detail) << "\n";
+    }
+    return os.str();
+}
+
+std::string CsvFormatter::format_findings_csv(const ScanReport& report) {
+    std::ostringstream os;
+    os << "severity,unit_id,finding_type,detail\n";
+
+    for (const auto& r : report.results) {
+        if (!r.responsive) continue;
+
+        if (r.write_test_vulnerable) {
+            os << "CRITICAL," << static_cast<int>(r.unit_id)
+               << ",unauthorized_write," << escape_csv(r.write_test_detail) << "\n";
+        }
+        if (r.holding_registers_readable) {
+            os << "HIGH," << static_cast<int>(r.unit_id)
+               << ",holding_registers_readable,Unauthenticated read access\n";
+        }
+        if (r.input_registers_readable) {
+            os << "HIGH," << static_cast<int>(r.unit_id)
+               << ",input_registers_readable,Unauthenticated read access\n";
+        }
+        if (r.coils_readable) {
+            os << "HIGH," << static_cast<int>(r.unit_id)
+               << ",coils_readable,Unauthenticated read access\n";
+        }
+        if (!r.holding_registers_readable && !r.input_registers_readable &&
+            !r.coils_readable && !r.write_test_vulnerable) {
+            os << "MEDIUM," << static_cast<int>(r.unit_id)
+               << ",device_info_leak,Unit responsive to probes\n";
+        }
+    }
+    return os.str();
+}
+
+}  // namespace modbus_probe
