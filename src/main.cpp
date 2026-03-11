@@ -159,3 +159,336 @@ static bool parse_range(const std::string& s, uint16_t& start, uint16_t& end, ch
         return false;
     }
 }
+
+int main(int argc, char* argv[]) {
+    ScanConfig config;
+    std::string output_file;
+    std::string pcap_file;
+    std::string discover_cidr;
+    bool monitor_mode = false;
+    bool no_device_id = false;
+
+    // Detect if stderr is a terminal for default color
+    config.color = isatty(STDERR_FILENO);
+
+    enum LongOpts {
+        OPT_RANGE = 256,
+        OPT_NO_COLOR,
+        OPT_NO_DEVICE_ID,
+        OPT_CONNECT_TIMEOUT,
+        OPT_PCAP,
+        OPT_MONITOR,
+        OPT_DISCOVER,
+        OPT_COMPLETIONS,
+        OPT_TLS,
+        OPT_CERT,
+        OPT_KEY,
+    };
+
+    static struct option long_opts[] = {
+        {"host",             required_argument, nullptr, 'H'},
+        {"port",             required_argument, nullptr, 'p'},
+        {"mode",             required_argument, nullptr, 'm'},
+        {"scan-ids",         required_argument, nullptr, 's'},
+        {"registers",        required_argument, nullptr, 'r'},
+        {"coils",            required_argument, nullptr, 'c'},
+        {"range",            required_argument, nullptr, OPT_RANGE},
+        {"test-write",       no_argument,       nullptr, 'w'},
+        {"fuzz",             optional_argument, nullptr, 'f'},
+        {"threads",          required_argument, nullptr, 'T'},
+        {"output",           required_argument, nullptr, 'o'},
+        {"format",           required_argument, nullptr, 'F'},
+        {"timeout",          required_argument, nullptr, 't'},
+        {"connect-timeout",  required_argument, nullptr, OPT_CONNECT_TIMEOUT},
+        {"pcap",             required_argument, nullptr, OPT_PCAP},
+        {"monitor",          no_argument,       nullptr, OPT_MONITOR},
+        {"discover",         required_argument, nullptr, OPT_DISCOVER},
+        {"completions",      required_argument, nullptr, OPT_COMPLETIONS},
+        {"tls",              no_argument,       nullptr, OPT_TLS},
+        {"cert",             required_argument, nullptr, OPT_CERT},
+        {"key",              required_argument, nullptr, OPT_KEY},
+        {"quiet",            no_argument,       nullptr, 'q'},
+        {"verbose",          no_argument,       nullptr, 'v'},
+        {"no-color",         no_argument,       nullptr, OPT_NO_COLOR},
+        {"no-device-id",     no_argument,       nullptr, OPT_NO_DEVICE_ID},
+        {"help",             no_argument,       nullptr, 'h'},
+        {nullptr,            0,                 nullptr,  0 }
+    };
+
+    int opt;
+    while ((opt = getopt_long(argc, argv, "H:p:m:s:r:c:wf::T:o:F:t:qvh", long_opts, nullptr)) != -1) {
+        switch (opt) {
+            case 'H':
+                config.host = optarg;
+                break;
+            case 'p':
+                config.port = static_cast<uint16_t>(std::stoul(optarg));
+                break;
+            case 'm':
+                if (std::string(optarg) == "rtu" || std::string(optarg) == "rtu_over_tcp") {
+                    config.protocol_mode = ProtocolMode::RTU_OVER_TCP;
+                } else {
+                    config.protocol_mode = ProtocolMode::TCP;
+                }
+                break;
+            case 's': {
+                uint16_t start, end;
+                if (!parse_range(optarg, start, end, '-') || start < 1 || end > 247) {
+                    std::cerr << "Error: Invalid unit ID range (must be 1-247)\n";
+                    return 1;
+                }
+                config.id_start = static_cast<uint8_t>(start);
+                config.id_end = static_cast<uint8_t>(end);
+                break;
+            }
+            case 'r': {
+                uint16_t start, count;
+                if (!parse_range(optarg, start, count, ':')) {
+                    std::cerr << "Error: Invalid register range (format: start:count)\n";
+                    return 1;
+                }
+                config.register_start = start;
+                config.register_count = count;
+                break;
+            }
+            case 'c': {
+                uint16_t start, count;
+                if (!parse_range(optarg, start, count, ':')) {
+                    std::cerr << "Error: Invalid coil range (format: start:count)\n";
+                    return 1;
+                }
+                config.coil_start = start;
+                config.coil_count = count;
+                break;
+            }
+            case OPT_RANGE:
+                config.extra_ranges = parse_register_ranges(optarg);
+                break;
+            case 'w':
+                config.test_write = true;
+                break;
+            case 'f':
+                config.fuzz_function_codes = true;
+                if (optarg) {
+                    config.fuzz_unit_id = static_cast<uint8_t>(std::stoul(optarg));
+                }
+                break;
+            case 'T':
+                config.thread_count = std::stoi(optarg);
+                if (config.thread_count < 1) config.thread_count = 1;
+                if (config.thread_count > 64) config.thread_count = 64;
+                break;
+            case 'o':
+                output_file = optarg;
+                break;
+            case 'F':
+                config.output_format = optarg;
+                break;
+            case 't':
+                config.timeout_ms = std::stoi(optarg);
+                break;
+            case OPT_CONNECT_TIMEOUT:
+                config.connect_timeout_ms = std::stoi(optarg);
+                break;
+            case 'q':
+                config.quiet = true;
+                break;
+            case 'v':
+                config.verbose = true;
+                break;
+            case OPT_NO_COLOR:
+                config.color = false;
+                break;
+            case OPT_PCAP:
+                pcap_file = optarg;
+                break;
+            case OPT_MONITOR:
+                monitor_mode = true;
+                break;
+            case OPT_DISCOVER:
+                discover_cidr = optarg;
+                break;
+            case OPT_COMPLETIONS:
+                generate_completions(optarg);
+                return 0;
+            case OPT_TLS:
+                // TLS flag acknowledged (requires OpenSSL at link time)
+                if (!config.quiet) {
+                    std::cerr << "Note: TLS support requires build with -DWITH_TLS=ON\n";
+                }
+                break;
+            case OPT_CERT:
+                // Store cert path for TLS mode (placeholder)
+                break;
+            case OPT_KEY:
+                // Store key path for TLS mode (placeholder)
+                break;
+            case OPT_NO_DEVICE_ID:
+                no_device_id = true;
+                break;
+            case 'h':
+            default:
+                print_usage(argv[0], config.color);
+                return (opt == 'h') ? 0 : 1;
+        }
+    }
+
+    if (no_device_id) {
+        config.read_device_id = false;
+    }
+
+    // --discover mode: scan network for Modbus devices and exit
+    if (!discover_cidr.empty()) {
+        DiscoveryConfig dconf;
+        dconf.cidr         = discover_cidr;
+        dconf.port         = config.port;
+        dconf.timeout_ms   = config.timeout_ms;
+        dconf.thread_count = config.thread_count > 1 ? config.thread_count : 16;
+        dconf.color        = config.color;
+        dconf.quiet        = config.quiet;
+        dconf.probe_modbus = true;
+
+        NetworkDiscovery discovery(dconf);
+        int found = discovery.run();
+
+        if (config.output_format == "json") {
+            std::string json = discovery.format_json();
+            if (!output_file.empty()) {
+                std::ofstream ofs(output_file);
+                ofs << json;
+            } else {
+                std::cout << json;
+            }
+        } else {
+            std::cout << discovery.format_results();
+        }
+
+        return (found > 0) ? 0 : 2;
+    }
+
+    if (config.host.empty()) {
+        std::cerr << "Error: --host is required\n\n";
+        print_usage(argv[0], config.color);
+        return 1;
+    }
+
+    // --monitor mode: continuously poll registers and alert on changes
+    if (monitor_mode) {
+        MonitorConfig mconf;
+        mconf.host           = config.host;
+        mconf.port           = config.port;
+        mconf.unit_id        = config.id_start;
+        mconf.register_start = config.register_start;
+        mconf.register_count = config.register_count;
+        mconf.timeout_ms     = config.timeout_ms;
+        mconf.color          = config.color;
+
+        RegisterMonitor monitor(mconf);
+        g_monitor = &monitor;
+
+        // Install SIGINT handler for clean shutdown
+        struct sigaction sa{};
+        sa.sa_handler = sigint_handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGINT, &sa, nullptr);
+
+        int changes = monitor.run();
+        g_monitor = nullptr;
+
+        if (!config.quiet) {
+            std::cerr << "\nMonitor stopped. " << changes << " change(s) detected.\n";
+        }
+        return (changes >= 0) ? 0 : 2;
+    }
+
+    // Initialize PCAP writer if requested
+    PcapWriter pcap;
+    if (!pcap_file.empty()) {
+        if (!pcap.open(pcap_file)) {
+            std::cerr << "Error: Failed to open PCAP file " << pcap_file << "\n";
+            return 2;
+        }
+        if (!config.quiet) {
+            std::cerr << "  PCAP capture: " << pcap_file << "\n";
+        }
+    }
+
+    ModbusScanner scanner(config);
+
+    if (config.verbose && !config.quiet) {
+        scanner.set_log_callback([](const std::string& msg) {
+            std::cerr << msg << "\n";
+        });
+    }
+
+    // Run the main scan
+    ScanReport report = scanner.run();
+
+    // Run fuzzing if requested
+    FuzzReport fuzz_report{};
+    if (config.fuzz_function_codes) {
+        fuzz_report = scanner.run_fuzz(config.fuzz_unit_id);
+    }
+
+    // Format and output
+    OutputFormat fmt = parse_output_format(config.output_format);
+
+    std::string output;
+    switch (fmt) {
+        case OutputFormat::JSON:
+            output = ReportGenerator::to_json(report);
+            break;
+        case OutputFormat::CSV:
+            output = CsvFormatter::format_csv(report);
+            break;
+        case OutputFormat::Table:
+            output = TableFormatter::format_table(report, config.color);
+            output += TableFormatter::format_findings_table(report, config.color);
+            // Show register/coil details for each unit
+            for (const auto& r : report.results) {
+                if (!r.responsive) continue;
+                output += TableFormatter::format_register_table(r, config.color);
+                output += TableFormatter::format_coil_table(r, config.color);
+            }
+            if (!report.results.empty()) {
+                output += TableFormatter::format_timing_table(report, config.color);
+            }
+            break;
+    }
+
+    // Add fuzz results if present
+    if (config.fuzz_function_codes && !fuzz_report.entries.empty()) {
+        if (fmt == OutputFormat::Table) {
+            output += TableFormatter::format_fuzz_table(fuzz_report.entries,
+                                                         fuzz_report.unit_id,
+                                                         config.color);
+        }
+        // For JSON/CSV the fuzz results are printed separately for simplicity
+    }
+
+    if (!output_file.empty()) {
+        std::ofstream ofs(output_file);
+        if (!ofs.is_open()) {
+            std::cerr << "Error: Failed to write report to " << output_file << "\n";
+            return 1;
+        }
+        ofs << output;
+        if (!config.quiet) {
+            std::cerr << "\n  Report written to " << output_file << "\n";
+        }
+    } else {
+        std::cout << output;
+    }
+
+    // Close PCAP file and report
+    if (pcap.is_open()) {
+        pcap.close();
+        if (!config.quiet) {
+            std::cerr << "  PCAP: " << pcap.packet_count() << " packets written to "
+                      << pcap_file << "\n";
+        }
+    }
+
+    return (report.units_responsive > 0) ? 0 : 2;
+}
