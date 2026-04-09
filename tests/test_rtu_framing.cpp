@@ -13,10 +13,10 @@ using namespace modbus_probe;
 
 TEST(crc16_known_vector) {
     // Known test vector: bytes {0x01, 0x03, 0x00, 0x00, 0x00, 0x0A}
-    // Expected CRC-16/Modbus: 0xC5CD
+    // Expected CRC-16/Modbus word: 0xCDC5 (on the wire, LSB first: C5 CD)
     std::vector<uint8_t> data = {0x01, 0x03, 0x00, 0x00, 0x00, 0x0A};
     uint16_t crc = RtuFraming::crc16(data);
-    ASSERT_EQ(crc, 0xC5CD);
+    ASSERT_EQ(crc, 0xCDC5);
 }
 
 TEST(crc16_single_byte) {
