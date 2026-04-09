@@ -1,5 +1,9 @@
 # modbus-probe
 
+[![CI](https://github.com/isecwire/modbus-probe/actions/workflows/ci.yml/badge.svg)](https://github.com/isecwire/modbus-probe/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
+
 Modbus TCP/RTU security scanner and auditor for OT/SCADA environments.
 
 `modbus-probe` performs unauthenticated reconnaissance, device fingerprinting, function code fuzzing, and write-access testing against Modbus devices. It implements the Modbus TCP and RTU-over-TCP protocols from scratch using raw sockets -- no external Modbus library dependencies -- giving full control over frame construction and timing for security assessment purposes.
